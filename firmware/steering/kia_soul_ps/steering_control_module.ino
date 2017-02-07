@@ -1,4 +1,5 @@
-/* Copyright (c) 2016 PolySync Technologies, Inc.  All Rights Reserved. */
+/************************************************************************/
+/* Copyright (c) 2017 PolySync Technologies, Inc.  All Rights Reserved. */
 /*                                                                      */
 /* This file is part of Open Source Car Control (OSCC).                 */
 /*                                                                      */
@@ -49,6 +50,7 @@
 
 // ms
 #define PS_CTRL_RX_WARN_TIMEOUT         ( 2500 )
+#define STEERING_LOOP_TIME_MS           ( 50 )
 
 // set up pins for interface with DAC (MCP4922)
 #define DAC_CS                          ( 9 )       // Chip select pin
@@ -81,10 +83,6 @@
 
 #define SAMPLE_B                        ( 1 )
 
-#define FAILURE                         ( 0 )
-
-#define SUCCESS                         ( 1 )
-
 
 // *****************************************************
 // local defined data structures
@@ -94,6 +92,13 @@ struct torque_spoof_t
 {
     uint16_t low;
     uint16_t high;
+};
+
+
+struct timer_data_s
+{
+    uint32_t timestamp;
+    const uint32_t period;
 };
 
 
@@ -109,19 +114,27 @@ MCP_CAN CAN( CAN_CS );                          // Set CS pin for the CAN shield
 
 
 //
-static can_frame_s rx_frame_ps_ctrl_steering_command;
-
-
-//
-static can_frame_s tx_frame_ps_ctrl_steering_report;
-
-
-//
 static current_control_state current_ctrl_state;
 
 
 //
 static PID pid_params;
+
+
+//
+static struct timer_data_s rx_steering_command_timestamp =
+    { 0, PS_CTRL_RX_WARN_TIMEOUT };
+
+
+//
+static struct timer_data_s tx_steering_report_timestamp =
+    { 0, PS_CTRL_STEERING_REPORT_PUBLISH_INTERVAL };
+
+
+//
+static struct timer_data_s ctrl_state_timestamp =
+    { 0, STEERING_LOOP_TIME_MS };
+
 
 
 // *****************************************************
@@ -130,67 +143,69 @@ static PID pid_params;
 
 
 // *****************************************************
-// Function:    timer_delta_ms
-//
-// Purpose:     Calculate the milliseconds between the current time and the
-//              input and correct for the timer overflow condition
-//
-// Returns:     uint32_t the time delta between the two inputs
-//
-// Parameters:  [in] timestamp - the last time sample
-//
+// Function:    schedule_timer
+// 
+// Purpose:     Set timer expiration at some point in the future based on the
+//              current time
+// 
+// Returns:     void
+// 
+// Parameters:  [in/out] timer - the timer data structure to schedule
+// 
 // *****************************************************
-static uint32_t timer_delta_ms( uint32_t last_time )
+static void schedule_timer( struct timer_data_s* const timer )
 {
-    uint32_t delta = 0;
-    uint32_t current_time = millis( );
-
-    if ( current_time < last_time )
+    if ( timer != NULL )
     {
-        // Timer overflow
-        delta = ( UINT32_MAX - last_time ) + current_time;
+        timer->timestamp = millis();
+        timer->timestamp += timer->period;
     }
-    else
-    {
-        delta = current_time - last_time;
-    }
-    return ( delta );
 }
 
 
 // *****************************************************
-// Function:    timer_delta_us
-//
-// Purpose:     Calculate the microseconds between the current time and the
-//              input and correct for the timer overflow condition
-//
-// Returns:     uint32_t the time delta between the two inputs
-//
-// Parameters:  [in] last_sample - the last time sample
-//              [in] current_sample - pointer to store the current time
-//
+// Function:    update_periodic_timer
+// 
+// Purpose:     Update the timer to the next period for this timer
+// 
+// Returns:     void
+// 
+// Parameters:  [in/out] timer - the timer data structure to update
+// 
 // *****************************************************
-static uint32_t timer_delta_us( uint32_t last_time, uint32_t* current_time )
+static void update_periodic_timer( struct timer_data_s* const timer )
 {
-    uint32_t delta = 0;
-    uint32_t local_time = micros( );
-
-    if ( local_time < last_time )
+    if ( timer != NULL )
     {
-        // Timer overflow
-        delta = ( UINT32_MAX - last_time ) + local_time;
+        timer->timestamp += timer->period;
     }
-    else
-    {
-        delta = local_time - last_time;
-    }
+}
 
-    if ( current_time != NULL )
-    {
-        *current_time = local_time;
-    }
 
-    return ( delta );
+// *****************************************************
+// Function:    is_timer_expired
+// 
+// Purpose:     Determine if the current time is greater than the input
+// 
+// Returns:     bool - the timer has expired
+// 
+// Parameters:  [in/out] timer - the timer to check for expiration
+// 
+// *****************************************************
+static bool is_timer_expired( const struct timer_data_s* const timer )
+{
+    bool expired = true;
+
+    if ( timer != NULL )
+    {
+        uint32_t current_time = millis( );
+
+        if ( timer->timestamp > current_time )
+        {
+            expired = false;
+        }
+    }
+    return ( expired );
 }
 
 
@@ -248,19 +263,19 @@ static void init_can ( void )
 //              averaging it out over the indicated number of samples
 //              Function takes 260us * num_samples to run
 //
-// Returns:     int16_t - SUCCESS or FAILURE
+// Returns:     bool - true = completed successfully
 //
 // Parameters:  [in]  num_samples - the number of samples to average
 //              [out] averages - array of values to store the averages
 //
 // *****************************************************
-static int16_t average_samples( int16_t num_samples, int16_t* averages )
+static bool average_samples( int16_t num_samples, int16_t* averages )
 {
-    int16_t return_code = FAILURE;
+    bool return_code = false;
 
     if ( averages != NULL )
     {
-        return_code = SUCCESS;
+        return_code = true;
 
         int32_t sums[ 2 ] = { 0, 0 };
 
@@ -290,24 +305,28 @@ static int16_t average_samples( int16_t num_samples, int16_t* averages )
 // *****************************************************
 void enable_control( )
 {
-    static int16_t num_samples = 20;
-    int16_t averages[ 2 ] = { 0, 0 };
-
-    int16_t status = average_samples( num_samples, averages );
-
-    if ( SUCCESS == status )
+    if ( ( current_ctrl_state.control_enabled == false ) &&
+         ( current_ctrl_state.emergency_stop == false ) )
     {
-        // Write measured torque values to DAC to avoid a signal
-        // discontinuity when the SCM takes over
-        dac.outputA( averages[ SAMPLE_A ] );
-        dac.outputB( averages[ SAMPLE_B ] );
+        const int16_t num_samples = 20;
+        int16_t averages[ 2 ] = { 0, 0 };
 
-        // Enable the signal interrupt relays
-        digitalWrite( SPOOF_ENGAGE, HIGH );
+        bool status = average_samples( num_samples, averages );
 
-        current_ctrl_state.control_enabled = true;
+        if ( true == status )
+        {
+            // Write measured torque values to DAC to avoid a signal
+            // discontinuity when the SCM takes over
+            dac.outputA( averages[ SAMPLE_A ] );
+            dac.outputB( averages[ SAMPLE_B ] );
 
-        DEBUG_PRINT( "Control enabled" );
+            // Enable the signal interrupt relays
+            digitalWrite( SPOOF_ENGAGE, HIGH );
+
+            current_ctrl_state.control_enabled = true;
+
+            DEBUG_PRINT( "Control enabled" );
+        }
     }
 }
 
@@ -329,7 +348,7 @@ void disable_control( )
 {
     if ( current_ctrl_state.control_enabled == true )
     {
-        static int16_t num_samples = 20;
+        const int16_t num_samples = 20;
         int16_t averages[ 2 ] = { 0, 0 };
 
         average_samples( num_samples, averages );
@@ -370,11 +389,6 @@ void disable_control( )
 //              If the filtered torque exceeds the max torque, it is an
 //              indicator that there is feedback on the steering wheel and the
 //              control should be disabled.
-//
-//              The final check determines if the a and b signals are opposite
-//              each other.  If they are not, it is an indicator that there is
-//              a problem with one of the sensors.  The check is looking for a
-//              90% tolerance.
 //
 // Returns:     true if the driver is requesting an override
 //
@@ -417,8 +431,8 @@ bool check_driver_steering_override( )
         ( torque_filter_alpha * torque_sensor_b ) +
             ( ( 1.0 - torque_filter_alpha ) * filtered_torque_b );
 
-    if ( ( abs( filtered_torque_a ) > steering_wheel_max_torque ) ||
-         ( abs( filtered_torque_b ) > steering_wheel_max_torque ) )
+    if ( ( filtered_torque_a > steering_wheel_max_torque ) ||
+         ( filtered_torque_b > steering_wheel_max_torque ) )
     {
         override = true;
     }
@@ -469,23 +483,21 @@ void calculate_torque_spoof( float torque, struct torque_spoof_t* spoof )
 // *****************************************************
 static void publish_ps_ctrl_steering_report( )
 {
-    tx_frame_ps_ctrl_steering_report.id =
-        ( uint32_t ) ( PS_CTRL_MSG_ID_STEERING_REPORT );
+    can_frame_s tx_frame;
 
-    tx_frame_ps_ctrl_steering_report.dlc = 8;
+    tx_frame.id = ( uint32_t )( PS_CTRL_MSG_ID_STEERING_REPORT );
 
-    // Get a pointer to the data buffer in the CAN frame and set
-    // the steering angle
+    tx_frame.dlc = 8;
+
+    // set the steering angle in the tx CAN frame
     ps_ctrl_steering_report_msg * data =
-        ( ps_ctrl_steering_report_msg* ) tx_frame_ps_ctrl_steering_report.data;
+        ( ps_ctrl_steering_report_msg* ) tx_frame.data;
 
     data->angle = current_ctrl_state.current_steering_angle;
 
-    tx_frame_ps_ctrl_steering_report.timestamp = millis( );
-
     // set override flag
     if ( ( current_ctrl_state.override_flag.wheel == 0 ) &&
-            ( current_ctrl_state.override_flag.voltage == 0 ) )
+         ( current_ctrl_state.override_flag.voltage == 0 ) )
     {
         data->override = 0;
     }
@@ -494,10 +506,7 @@ static void publish_ps_ctrl_steering_report( )
         data->override = 1;
     }
 
-    CAN.sendMsgBuf( tx_frame_ps_ctrl_steering_report.id,
-                    0,
-                    tx_frame_ps_ctrl_steering_report.dlc,
-                    tx_frame_ps_ctrl_steering_report.data );
+    CAN.sendMsgBuf( tx_frame.id, 0, tx_frame.dlc, tx_frame.data );
 }
 
 
@@ -514,11 +523,12 @@ static void publish_ps_ctrl_steering_report( )
 // *****************************************************
 static void publish_timed_tx_frames( )
 {
-    uint32_t delta =
-        timer_delta_ms( tx_frame_ps_ctrl_steering_report.timestamp );
+    bool timer_expired = is_timer_expired( &tx_steering_report_timestamp );
 
-    if ( delta >= PS_CTRL_STEERING_REPORT_PUBLISH_INTERVAL )
+    if ( timer_expired == true )
     {
+        update_periodic_timer( &tx_steering_report_timestamp );
+
         publish_ps_ctrl_steering_report();
     }
 }
@@ -538,27 +548,22 @@ static void process_ps_ctrl_steering_command(
     const ps_ctrl_steering_command_msg * const control_data )
 {
     current_ctrl_state.commanded_steering_angle =
-        control_data->steering_wheel_angle_command / 9.0;
+        control_data->steering_wheel_angle_command * ( 1.0 / 9.0 );
 
     current_ctrl_state.steering_angle_rate_max =
         control_data->steering_wheel_max_velocity * 9.0;
 
-    if ( ( control_data->enabled == 1 ) &&
-            ( current_ctrl_state.control_enabled == false ) &&
-            ( current_ctrl_state.emergency_stop == false ) )
+    if ( control_data->enabled == 1 )
     {
-        current_ctrl_state.control_enabled = true;
         enable_control( );
     }
 
-    if ( ( control_data->enabled == 0 ) &&
-            ( current_ctrl_state.control_enabled == true ) )
+    if ( control_data->enabled == 0 )
     {
-        current_ctrl_state.control_enabled = false;
         disable_control( );
     }
 
-    rx_frame_ps_ctrl_steering_command.timestamp = millis( );
+    schedule_timer( &rx_steering_command_timestamp );
 }
 
 
@@ -635,13 +640,12 @@ void handle_ready_rx_frames( )
 // *****************************************************
 static void check_rx_timeouts( )
 {
-    uint32_t delta =
-        timer_delta_ms( rx_frame_ps_ctrl_steering_command.timestamp );
+    bool timer_expired = is_timer_expired( &rx_steering_command_timestamp );
 
-    if ( delta >= PS_CTRL_RX_WARN_TIMEOUT )
+    if ( timer_expired == true ) 
     {
-        DEBUG_PRINT( "Control disabled: Timeout" );
         disable_control();
+        DEBUG_PRINT( "Control disabled: Timeout" );
     }
 }
 
@@ -667,10 +671,6 @@ static void check_rx_timeouts( )
 // *****************************************************
 void setup( )
 {
-    memset( &rx_frame_ps_ctrl_steering_command,
-            0,
-            sizeof(rx_frame_ps_ctrl_steering_command) );
-
     // Set the direction for analog pins
 
     pinMode( DAC_CS, OUTPUT );
@@ -704,8 +704,12 @@ void setup( )
 
     current_ctrl_state.override_flag.voltage_spike_b = 0;
 
-    // Initialize the Rx timestamps to avoid timeout warnings on start up
-    rx_frame_ps_ctrl_steering_command.timestamp = millis( );
+    // Initialize timers
+    schedule_timer( &ctrl_state_timestamp );
+
+    schedule_timer( &rx_steering_command_timestamp );
+
+    schedule_timer( &tx_steering_report_timestamp );
 
     pid_zeroize( &pid_params, STEERING_WINDUP_GUARD );
 
@@ -743,15 +747,11 @@ void loop( )
     // check all timeouts
     check_rx_timeouts( );
 
-    uint32_t current_timestamp_us;
+    bool timer_expired = is_timer_expired( &ctrl_state_timestamp );
 
-    uint32_t deltaT = timer_delta_us( current_ctrl_state.timestamp_us,
-                                      &current_timestamp_us );
-
-    if ( deltaT > 50000 )
+    if ( timer_expired == true )
     {
-
-        current_ctrl_state.timestamp_us = current_timestamp_us;
+        update_periodic_timer( &ctrl_state_timestamp );
 
         bool override = check_driver_steering_override( );
 
@@ -765,11 +765,11 @@ void loop( )
             // Calculate steering angle rates (degrees/microsecond)
             double steering_angle_rate =
                 ( current_ctrl_state.current_steering_angle -
-                  current_ctrl_state.steering_angle_last ) / 0.05;
+                  current_ctrl_state.steering_angle_last ) * ( 1.0 / 0.05 );
 
             double steering_angle_rate_target =
                 ( current_ctrl_state.commanded_steering_angle -
-                  current_ctrl_state.current_steering_angle ) / 0.05;
+                  current_ctrl_state.current_steering_angle ) * ( 1.0 / 0.05 );
 
             // Save the angle for next iteration
             current_ctrl_state.steering_angle_last =
@@ -784,11 +784,10 @@ void loop( )
             pid_params.proportional_gain = current_ctrl_state.SA_Kp;
             pid_params.integral_gain = current_ctrl_state.SA_Ki;
 
-            pid_update(
-                    &pid_params,
-                    steering_angle_rate_target,
-                    steering_angle_rate,
-                    0.050 );
+            pid_update( &pid_params,
+                        steering_angle_rate_target,
+                        steering_angle_rate,
+                        0.050 );
 
             double control = pid_params.control;
 
