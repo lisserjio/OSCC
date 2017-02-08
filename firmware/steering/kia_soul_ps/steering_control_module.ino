@@ -92,8 +92,8 @@
 
 struct torque_spoof_t
 {
-    uint16_t low;
-    uint16_t high;
+    uint16_t channel_a;
+    uint16_t channel_b;
 };
 
 
@@ -371,11 +371,6 @@ void disable_control( )
 //              indicator that there is feedback on the steering wheel and the
 //              control should be disabled.
 //
-//              The final check determines if the a and b signals are opposite
-//              each other.  If they are not, it is an indicator that there is
-//              a problem with one of the sensors.  The check is looking for a
-//              90% tolerance.
-//
 // Returns:     true if the driver is requesting an override
 //
 // Parameters:  None
@@ -444,8 +439,8 @@ bool check_driver_steering_override( )
 // *****************************************************
 void calculate_torque_spoof( float torque, struct torque_spoof_t* spoof )
 {
-    spoof->low = 819.2 * ( 0.0008 * torque + 2.26 );
-    spoof->high = 819.2 * ( -0.0008 * torque + 2.5 );
+    spoof->channel_a = 819.2 * ( 0.0008 * torque + 2.26 );
+    spoof->channel_b = 819.2 * ( -0.0008 * torque + 2.5 );
 }
 
 
@@ -646,6 +641,151 @@ static void check_rx_timeouts( )
 }
 
 
+/* ====================================== */
+/* ============= DIAGNOSTICS ============ */
+/* ====================================== */
+
+// *****************************************************
+// Function:    check_voltage_difference
+//
+// Purpose:     Compare two voltage inputs to determine if the difference
+//              between the two exceeds the max allowed
+//
+//              It should be noted here that both values are unsigned because
+//              of the nature of dealing with the DAC and ADC hardware both
+//              of which are scaled on positive-only ranges.
+//
+//              The maximum allowable difference between the DAC and the ADC
+//              readings has been empirically determined to be 96 mV.  At
+//              1.22 mV / bit, this means the max difference must be 79 bits.
+//              If the difference exceeds 96 mV then the hardware unit is
+//              considered to have failed.
+//
+// Returns:     bool - true if the difference is greater than the allowed max
+//
+// Parameters:  [in] voltage_1 - should be in the range 0 - 4095
+//              [in] voltage_2 - should be in the range 0 - 4095
+//
+// *****************************************************
+bool check_voltage_difference( uint16_t voltage_1, uint16_t voltage_2 )
+{
+    const uint16_t max_voltage_difference = 79;
+
+    uint16_t difference = voltage_1 - voltage_2;
+
+    bool voltage_exceeded = false;
+
+    if ( voltage_1 < voltage_2 )
+    {
+        difference = voltage_2 - voltage_1;
+    }
+
+    if ( difference > max_voltage_difference )
+    {
+        voltage_exceeded = true;
+    }
+
+    return ( voltage_exceeded );
+}
+
+// *****************************************************
+// Function:    check_dac_output
+//
+// Purpose:     This function checks the voltage input from the output of the
+//              DACs that are writing values to the steering control.  The
+//              diagnostic code is designed to compare the value read from
+//              and ADC that is connected to the DAC output. The diagnostic
+//              specifically filters the ADC input to eliminate any voltage
+//              spikes caused by vehicle activity
+//
+//              The alpha for the exponential filter is 0.5 to make the input
+//              go "close to" zero in 250 ms and achieve a 67% value in ~70 ms
+//
+//              The implementation is:
+//                  s(t) = ( a * x(t) ) + ( ( 1 - a ) * s ( t - 1 ) )
+//
+//              The output is scaled from 0 to 5V, and is a 12-bit DAC, which
+//              means that each bit represents about 1.22 mV
+//
+//                  5V      1000 mV   1.22 mV
+//              --------- * ------- = -------
+//              4095 bits      V        bit
+//
+//              The values from the DAC are stored as raw integer values
+//              (0x0 to 0xFFF)
+//
+//              The ADC is only 10 bits.  To compare the values read from the
+//              ADC it must be scaled to the same range as the DAC, which
+//              means left-shifting the input value by two to be in the same
+//              12 bit range as the DAC
+//
+//              The maximum allowable difference between the DAC and the ADC
+//              readings has been empirically determined to be 96 mV.  At
+//              1.22 mV / bit, this means the max difference must be 79 bits.
+//              If the difference exceeds 96 mV then the hardware unit is
+//              considered to have failed.
+//
+//              The sample is checked every 5 iterations, but sampled every
+//              iteration.
+//
+// Returns:     true if the filtered ADC input is in range of the DAC
+//
+// Parameters:  dac_output - raw torque output values sent to the DAC
+//
+// *****************************************************
+bool check_dac_output( struct torque_spoof_t* dac_output )
+{
+    bool hardware_pass = true;
+
+    if ( dac_output != NULL )
+    {
+        static const float adc_input_alpha = 0.5;
+
+        static int16_t check_dac_count = 0;
+
+        static float filtered_spoof_a = 0.0;
+        static float filtered_spoof_b = 0.0;
+
+        float torque_spoof_a = ( float )( analogRead( SPOOF_SIGNAL_A ) << 2 );
+        float torque_spoof_b = ( float )( analogRead( SPOOF_SIGNAL_B ) << 2 );
+
+        filtered_spoof_a =
+            ( adc_input_alpha * torque_spoof_a ) +
+                ( ( 1.0 - adc_input_alpha ) * filtered_spoof_a );
+
+        filtered_spoof_b =
+            ( adc_input_alpha * torque_spoof_b ) +
+                ( ( 1.0 - adc_input_alpha ) * filtered_spoof_b );
+
+        if ( check_dac_count < 5 )
+        {
+            check_dac_count += 1;
+        }
+        else
+        {
+            check_dac_count = 0;
+
+            hardware_pass = false;
+
+            bool voltage_a_exceeded =
+                check_voltage_difference( ( uint16_t )filtered_spoof_a,
+                                          dac_output->channel_a );
+
+            bool voltage_b_exceeded =
+                check_voltage_difference( ( uint16_t )filtered_spoof_b,
+                                          dac_output->channel_b );
+
+            if ( ( voltage_a_exceeded == false ) &&
+                 ( voltage_b_exceeded == false ) )
+            {
+                hardware_pass = true;
+            }
+        }
+    }
+    return ( hardware_pass );
+}
+
+
 
 /* ====================================== */
 /* ================ SETUP =============== */
@@ -763,11 +903,11 @@ void loop( )
         else if ( current_ctrl_state.control_enabled == true )
         {
             // Calculate steering angle rates (degrees/microsecond)
-            double steering_angle_rate =
+            float steering_angle_rate =
                 ( current_ctrl_state.current_steering_angle -
                   current_ctrl_state.steering_angle_last ) / 0.05;
 
-            double steering_angle_rate_target =
+            float steering_angle_rate_target =
                 ( current_ctrl_state.commanded_steering_angle -
                   current_ctrl_state.current_steering_angle ) / 0.05;
 
@@ -776,9 +916,9 @@ void loop( )
                 current_ctrl_state.current_steering_angle;
 
             steering_angle_rate_target =
-                constrain( ( double )steering_angle_rate_target,
-                           ( double )-current_ctrl_state.steering_angle_rate_max,
-                           ( double )current_ctrl_state.steering_angle_rate_max );
+                constrain( ( float )steering_angle_rate_target,
+                           ( float )-current_ctrl_state.steering_angle_rate_max,
+                           ( float )current_ctrl_state.steering_angle_rate_max );
 
             pid_params.derivative_gain = current_ctrl_state.SA_Kd;
             pid_params.proportional_gain = current_ctrl_state.SA_Kp;
@@ -790,7 +930,7 @@ void loop( )
                     steering_angle_rate,
                     0.050 );
 
-            double control = pid_params.control;
+            float control = pid_params.control;
 
             control = constrain( ( float ) control,
                                  ( float ) -1500.0f,
@@ -800,8 +940,15 @@ void loop( )
 
             calculate_torque_spoof( control, &torque_spoof );
 
-            dac.outputA( torque_spoof.low );
-            dac.outputB( torque_spoof.high );
+            dac.outputA( torque_spoof.channel_a );
+            dac.outputB( torque_spoof.channel_b );
+
+            bool dac_diagnostic = check_dac_output( &torque_spoof );
+
+            if ( dac_diagnostic == false )
+            {
+                disable_control();
+            }
         }
         else
         {
