@@ -32,7 +32,11 @@ const double MIN_PACC = 2.3;              // minumum accumulator pressure to mai
 const double MAX_PACC = 2.4;              // max accumulator pressure to maintain
 const double PEDAL_THRESH = 0.5;          // Pressure for pedal interference
 
+int PACC_CURRENT_CYCLE_COUNT = 0;    // How many times has the accumulator been pressurized and purged
+int PACC_CYCLE_TARGET = 10;           // Number of times to presserize and purge the accumulator
+
 uint8_t incomingSerialByte;
+static uint32_t timestamp;
 
 // convert the ADC reading (which goes from 0 - 1023) to a voltage (0 - 5V):
 float convertToVoltage(int input) {
@@ -159,7 +163,6 @@ struct Brakes {
     // spill pressure
     void powerSLR(int scaler)
     {
-        Serial.println(scaler);
         analogWrite( _solenoidPinLeftR, scaler );
         analogWrite( _solenoidPinRightR, scaler );
     }
@@ -205,6 +208,27 @@ Accumulator accumulator( PIN_PACC, PIN_PUMP );
 SMC smc(PIN_PMC1, PIN_PMC2, PIN_SMC);
 Brakes brakes = Brakes( PIN_PFL, PIN_PFR, PIN_SLAFL, PIN_SLAFR, PIN_SLRFL, PIN_SLRFR);
 
+// corrects for overflow condition
+static void get_update_time_delta_ms(
+		const uint32_t time_in,
+		const uint32_t last_update_time_ms,
+		uint32_t * const delta_out )
+{
+    // check for overflow
+    if( last_update_time_ms < time_in )
+    {
+		// time remainder, prior to the overflow
+		(*delta_out) = (UINT32_MAX - time_in);
+
+        // add time since zero
+        (*delta_out) += last_update_time_ms;
+    }
+    else
+    {
+        // normal delta
+        (*delta_out) = ( last_update_time_ms - time_in );
+    }
+}
 static void init_serial( void )
 {
     // Disable serial
@@ -241,10 +265,11 @@ void setup( void )
     digitalWrite( PIN_BRAKE_SWITCH_1, LOW );
     pinMode( PIN_BRAKE_SWITCH_1, OUTPUT );
 
+
     // Set up solenoids for priming
     smc.solenoidsOpen();
-    brakes.powerSLA(255);
     brakes.depowerSLR();
+    brakes.powerSLA(250);
 
     init_serial();
 
@@ -255,7 +280,13 @@ void setup( void )
     Serial.println( "the brake pedal continuously and fully." );
     Serial.println( "The brake pump will turn off once the accumulator has been pressurized. " );
     Serial.println( "Press any key to continue:" );
+
+    // Wait for input before entering the main loop
     while(!Serial.available()) ;
+
+    timestamp = GET_TIMESTAMP_MS();
+    PACC_CURRENT_CYCLE_COUNT = 0;
+
 }
 
 void loop()
@@ -266,5 +297,38 @@ void loop()
         incomingSerialByte = Serial.read();
         processSerialByte();
     }
-    accumulator.maintainPressure();
+
+    // Cycle opening and closing solenoids in a loop while runnig the pump
+
+    while( PACC_CURRENT_CYCLE_COUNT < PACC_CYCLE_TARGET )
+    {
+        uint32_t delta = 0;
+
+        accumulator.maintainPressure();
+        
+        get_update_time_delta_ms(
+                timestamp,
+                GET_TIMESTAMP_MS(),
+                &delta );
+
+        if( delta < 5000 )
+        {
+            smc.solenoidsClose();
+            brakes.powerSLR(250);
+        }
+
+        if( delta >= 5000 )
+        {
+            smc.solenoidsOpen();
+            brakes.depowerSLR();
+        }
+
+        if( delta >= 10000 )
+        {
+            timestamp = GET_TIMESTAMP_MS();
+            PACC_CURRENT_CYCLE_COUNT++;
+        }
+    }
+
+    accumulator.pumpOff();
 }

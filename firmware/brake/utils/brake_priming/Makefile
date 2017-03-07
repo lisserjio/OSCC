@@ -14,41 +14,33 @@ endif
 PROJECT_DIR := $(shell pwd)
 
 #
-ARDMK_DIR = $(PROJECT_DIR)/../../arduino_make
+ARDMK_DIR = $(PROJECT_DIR)/../../../arduino_make
 
 #
 ifeq ($(OSFLAG), LINUX)
     ARDUINO_DIR = /usr/share/arduino
+
+    BOARD_TAG = mega2560
+
+    AVRDUDE = /usr/bin/avrdude
 endif
 ifeq ($(OSFLAG), OSX)
     ARDUINO_DIR=/Applications/Arduino.app/Contents/Java/
-endif
-
-#
-USER_LIB_PATH = $(PROJECT_DIR)/../../arduino_libraries
-
-#
-ifeq ($(OSFLAG), LINUX)
-    BOARD_TAG = mega2560
-endif
-ifeq ($(OSFLAG), OSX)
+    
     BOARD_TAG = mega
     BOARD_SUB = atmega2560
+
+    AVRDUDE = /usr/local/bin/avrdude
 endif
+
+#
+USER_LIB_PATH = $(PROJECT_DIR)/../../../arduino_libraries
 
 #
 MONITOR_BAUDRATE = 115200
 
 #
 AVR_TOOLS_DIR =
-
-#
-ifeq ($(OSFLAG), LINUX)
-    AVRDUDE = /usr/bin/avrdude
-endif
-ifeq ($(OSFLAG), OSX)
-    AVRDUDE = /usr/local/bin/avrdude
-endif
 
 #
 CFLAGS_STD = -std=gnu11
