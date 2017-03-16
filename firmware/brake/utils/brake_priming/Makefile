@@ -61,7 +61,7 @@ ifeq ($(OSFLAG), LINUX)
     MONITOR_PORT = /dev/ttyACM*
 endif
 ifeq ($(OSFLAG), OSX)
-    MONITOR_PORT = /dev/tty.usb*
+    MONITOR_PORT = /dev/cu.usb*
 endif
 
 #

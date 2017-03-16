@@ -273,17 +273,6 @@ void setup( void )
 
     init_serial();
 
-    Serial.flush(); //flush all previous received and transmitted data
-    Serial.println( "=============================================================" );
-    Serial.println( "This firmware is used for priming the brake accumulator pump." );
-    Serial.println( "During the process the pump will run and the user should pump");
-    Serial.println( "the brake pedal continuously and fully." );
-    Serial.println( "The brake pump will turn off once the accumulator has been pressurized. " );
-    Serial.println( "Press any key to continue:" );
-
-    // Wait for input before entering the main loop
-    while(!Serial.available()) ;
-
     timestamp = GET_TIMESTAMP_MS();
     PACC_CURRENT_CYCLE_COUNT = 0;
 
@@ -291,44 +280,54 @@ void setup( void )
 
 void loop()
 {
-    // read and parse incoming serial commands
-    if( Serial.available() > 0 )
-    {
-        incomingSerialByte = Serial.read();
-        processSerialByte();
-    }
-
-    // Cycle opening and closing solenoids in a loop while runnig the pump
-
-    while( PACC_CURRENT_CYCLE_COUNT < PACC_CYCLE_TARGET )
-    {
-        uint32_t delta = 0;
-
-        accumulator.maintainPressure();
-        
-        get_update_time_delta_ms(
-                timestamp,
-                GET_TIMESTAMP_MS(),
-                &delta );
-
-        if( delta < 5000 )
-        {
-            smc.solenoidsClose();
-            brakes.powerSLR(250);
-        }
-
-        if( delta >= 5000 )
-        {
-            smc.solenoidsOpen();
-            brakes.depowerSLR();
-        }
-
-        if( delta >= 10000 )
-        {
-            timestamp = GET_TIMESTAMP_MS();
-            PACC_CURRENT_CYCLE_COUNT++;
-        }
-    }
-
-    accumulator.pumpOff();
+    smc.solenoidsClose();
+//    // read and parse incoming serial commands
+//    if( Serial.available() > 0 )
+//    {
+//        incomingSerialByte = Serial.read();
+//        processSerialByte();
+//    }
+//
+//    // Cycle opening and closing solenoids in a loop while runnig the pump
+//
+//    while( PACC_CURRENT_CYCLE_COUNT < PACC_CYCLE_TARGET )
+//    {
+//        uint32_t delta = 0;
+//
+//        accumulator.maintainPressure();
+//        
+//        get_update_time_delta_ms(
+//                timestamp,
+//                GET_TIMESTAMP_MS(),
+//                &delta );
+//
+//        if( delta < 5000 )
+//        {
+//            brakes.powerSLA(250);
+//            brakes.powerSLR(250);
+//            smc.solenoidsClose();
+//        }
+//
+//        if( delta >= 5000 && delta < 10000 )
+//        {
+//            brakes.powerSLA(250);
+//            brakes.depowerSLR();
+//            smc.solenoidsOpen();
+//       }
+//
+//        if( delta >= 10000 && delta < 15000 )
+//        {
+//            brakes.depowerSLR();
+//            brakes.depowerSLA();
+//            smc.solenoidsClose();
+//
+//        }
+//        if (delta >= 15000 )
+//        {
+//            timestamp = GET_TIMESTAMP_MS();
+//            PACC_CURRENT_CYCLE_COUNT++;
+//        }
+//    }
+//
+//    accumulator.pumpOff();
 }
