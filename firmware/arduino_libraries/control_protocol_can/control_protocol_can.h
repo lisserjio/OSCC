@@ -189,8 +189,13 @@ extern "C" {
 //
 #define PSVC_CHASSIS_STATE1_FLAG_BIT_BRAKE_SIGNAL_ON (0x80)
 
+
 //
 #define KIA_STATUS1_MESSAGE_ID (0x210)
+
+
+//
+#define PSVC_MSG_ID_WHEEL_SPEED_REPORT (0x06A)
 
 
 

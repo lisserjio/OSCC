@@ -337,6 +337,27 @@ static void publish_chassis_state2_frame( void )
 
 
 //
+static void publish_wheel_speed_report_frame( void )
+{
+    // set frame ID
+    tx_frame_chassis_state2.id = (uint32_t) PSVC_MSG_ID_WHEEL_SPEED_REPORT;
+
+    // set DLC
+    tx_frame_chassis_state2.dlc = PSVC_CHASSIS_STATE2_MSG_DLC;
+
+    // publish to control CAN bus
+    control_can.sendMsgBuf(
+            tx_frame_chassis_state2.id,
+            0, // standard ID (not extended)
+            tx_frame_chassis_state2.dlc,
+            tx_frame_chassis_state2.data );
+
+    // update last publish timestamp, ms
+    tx_frame_chassis_state2.timestamp = last_update_ms;
+}
+
+
+//
 static void publish_timed_tx_frames( void )
 {
     // local vars
@@ -351,6 +372,7 @@ static void publish_timed_tx_frames( void )
     {
         // publish frame, update timestamp
         publish_heartbeat_frame();
+        Serial.println( "hearbeat");
     }
 
     // get time since last publish
@@ -361,6 +383,8 @@ static void publish_timed_tx_frames( void )
     {
         // publish frame, update timestamp
         publish_chassis_state1_frame();
+
+        Serial.println( "state1");
     }
 
     // get time since last publish
@@ -369,8 +393,11 @@ static void publish_timed_tx_frames( void )
     // check publish interval
     if( delta >= PSVC_CHASSIS_STATE2_MSG_TX_PUBLISH_INTERVAL )
     {
+        Serial.println( "state2");
         // publish frame, update timestamp
         publish_chassis_state2_frame();
+
+        publish_wheel_speed_report_frame();
     }
 }
 
