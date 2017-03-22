@@ -280,54 +280,53 @@ void setup( void )
 
 void loop()
 {
-    smc.solenoidsClose();
-//    // read and parse incoming serial commands
-//    if( Serial.available() > 0 )
-//    {
-//        incomingSerialByte = Serial.read();
-//        processSerialByte();
-//    }
-//
-//    // Cycle opening and closing solenoids in a loop while runnig the pump
-//
-//    while( PACC_CURRENT_CYCLE_COUNT < PACC_CYCLE_TARGET )
-//    {
-//        uint32_t delta = 0;
-//
-//        accumulator.maintainPressure();
-//        
-//        get_update_time_delta_ms(
-//                timestamp,
-//                GET_TIMESTAMP_MS(),
-//                &delta );
-//
-//        if( delta < 5000 )
-//        {
-//            brakes.powerSLA(250);
-//            brakes.powerSLR(250);
-//            smc.solenoidsClose();
-//        }
-//
-//        if( delta >= 5000 && delta < 10000 )
-//        {
-//            brakes.powerSLA(250);
-//            brakes.depowerSLR();
-//            smc.solenoidsOpen();
-//       }
-//
-//        if( delta >= 10000 && delta < 15000 )
-//        {
-//            brakes.depowerSLR();
-//            brakes.depowerSLA();
-//            smc.solenoidsClose();
-//
-//        }
-//        if (delta >= 15000 )
-//        {
-//            timestamp = GET_TIMESTAMP_MS();
-//            PACC_CURRENT_CYCLE_COUNT++;
-//        }
-//    }
-//
-//    accumulator.pumpOff();
+    // read and parse incoming serial commands
+    if( Serial.available() > 0 )
+    {
+        incomingSerialByte = Serial.read();
+        processSerialByte();
+    }
+
+    // Cycle opening and closing solenoids in a loop while runnig the pump
+
+    while( PACC_CURRENT_CYCLE_COUNT < PACC_CYCLE_TARGET )
+    {
+        uint32_t delta = 0;
+
+        accumulator.maintainPressure();
+        
+        get_update_time_delta_ms(
+                timestamp,
+                GET_TIMESTAMP_MS(),
+                &delta );
+
+        if( delta < 5000 )
+        {
+            brakes.powerSLA(250);
+            brakes.powerSLR(250);
+            smc.solenoidsClose();
+        }
+
+        if( delta >= 5000 && delta < 10000 )
+        {
+            brakes.powerSLA(250);
+            brakes.depowerSLR();
+            smc.solenoidsOpen();
+       }
+
+        if( delta >= 10000 && delta < 15000 )
+        {
+            brakes.depowerSLR();
+            brakes.depowerSLA();
+            smc.solenoidsClose();
+
+        }
+        if (delta >= 15000 )
+        {
+            timestamp = GET_TIMESTAMP_MS();
+            PACC_CURRENT_CYCLE_COUNT++;
+        }
+    }
+
+    accumulator.pumpOff();
 }
