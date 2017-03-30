@@ -171,7 +171,8 @@ double pressure_req,
        pressure,
        pressure_last,
        pressureRate_target,
-       pressureRate;
+       pressureRate,
+       last_pressure_in_volts[ 3 ];
 
 uint8_t incomingSerialByte;
 
@@ -190,6 +191,7 @@ void brakeUpdate();
 void brakeExit();
 
 bool controlEnabled = false;
+bool is_pump_on = false;
 int local_override = 0;
 
 unsigned int pedal_command_raw;
@@ -250,16 +252,50 @@ struct Accumulator {
     void pumpOn()
     {
         digitalWrite(_controlPin, HIGH);
+        is_pump_on = true;
     }
 
 
     void pumpOff()
     {
         digitalWrite(_controlPin, LOW);
+        is_pump_on = false;
+    }
+
+    bool check_for_voltage_decrease( float current_pressure_in_volts )
+    {
+        // if initial values present, assume normal operation and return
+        if(     last_pressure_in_volts[ 0 ] == 999 ||
+                last_pressure_in_volts[ 1 ] == 999 ||
+                last_pressure_in_volts[ 2 ] == 999 )
+        {
+            return false;
+        }
+
+        // if current pressure is not different than previous, do nothing
+        if ( last_pressure_in_volts[ 2 ] == current_pressure_in_volts )
+        {
+            return false;
+        }
+
+        // add current pressure to last recorded pressures (last index)
+        last_pressure_in_volts[ 0 ] = last_pressure_in_volts[ 1 ];
+        last_pressure_in_volts[ 1 ] = last_pressure_in_volts[ 2 ];
+        last_pressure_in_volts[ 2 ] = current_pressure_in_volts;
+
+        // check for a DECREASE in recorded voltages
+        if( last_pressure_in_volts[ 2 ] < last_pressure_in_volts[ 1 ] )
+        {
+            return true;
+        }
+        else
+        {
+            return false;
+        }
     }
 
     // *****************************************************
-    // Function:    maintainPressure()
+    // Function:    Pressure()
     //
     // Purpose:     This function checks the voltage input from the accumulator
     //              pressure sensor to determine if the accumulator pump should
@@ -287,16 +323,24 @@ struct Accumulator {
         _pressure = ( filter_alpha * sensor_1 ) +
             ( ( 1.0 - filter_alpha ) * _pressure );
 
+        bool is_voltage_dropping = check_for_voltage_decrease( _pressure );
+
         if( _pressure < MIN_PACC )
         {
-            pumpOn();
+            pumpOn( );
         }
 
         if( _pressure > MAX_PACC )
         {
-            pumpOff();
+            pumpOff( );
+        }
+
+        if( is_pump_on && is_voltage_dropping )
+        {
+            pumpOff( );
         }
     }
+
 };
 
 
@@ -857,6 +901,11 @@ void setup( void )
     SLADutyMin = 50;
     SLRDutyMax = 100;
     SLRDutyMin = 50;
+
+    // initialize previous pressure array to null
+    last_pressure_in_volts[0] = 999;
+    last_pressure_in_volts[1] = 999;
+    last_pressure_in_volts[2] = 999;
 
     // zero
     last_update_ms = 0;
