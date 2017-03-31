@@ -158,8 +158,8 @@ const byte PIN_PFL  = 14;      // pressure front left sensor
 
 // the following are guesses, these need to be debugged/researched
 const double ZERO_PRESSURE = 0.48;        // The voltage the sensors read when no pressure is present
-const double MIN_PACC = 2.3;              // minumum accumulator pressure to maintain
-const double MAX_PACC = 2.4;              // max accumulator pressure to maintain
+const double MIN_PACC = 2.1;              // minumum accumulator pressure to maintain
+const double MAX_PACC = 2.3;              // max accumulator pressure to maintain
 const double PEDAL_THRESH = 0.6;          // Pressure for pedal interference
 
 int SLADutyMax,
@@ -284,7 +284,8 @@ struct Accumulator {
         last_pressure_in_volts[ 2 ] = current_pressure_in_volts;
 
         // check for a DECREASE in recorded voltages
-        if( last_pressure_in_volts[ 2 ] < last_pressure_in_volts[ 1 ] )
+        if(     last_pressure_in_volts[ 2 ] < last_pressure_in_volts[ 1 ] &&
+                last_pressure_in_volts[ 1 ] < last_pressure_in_volts[ 0 ] )
         {
             return true;
         }
@@ -295,7 +296,7 @@ struct Accumulator {
     }
 
     // *****************************************************
-    // Function:    Pressure()
+    // Function:    maintainPressure()
     //
     // Purpose:     This function checks the voltage input from the accumulator
     //              pressure sensor to determine if the accumulator pump should
@@ -335,7 +336,7 @@ struct Accumulator {
             pumpOff( );
         }
 
-        if( is_pump_on && is_voltage_dropping )
+        if( is_pump_on == true && is_voltage_dropping == true )
         {
             pumpOff( );
         }
