@@ -26,6 +26,9 @@
 /* OTHER DEALINGS IN THE SOFTWARE.                                      */
 /************************************************************************/
 
+#ifndef CURRENT_CONTROL_H
+#define CURRENT_CONTROL_H
+
 /**
  * @brief Current control state.
  *
@@ -35,7 +38,7 @@
 
  typedef struct /* Tracks override flags for pedal and voltages */
  {
-     uint16_t wheel; /* Tracks whether pedal is pressed */
+     uint16_t wheel; /* Tracks whether steering wheel is turned */
      uint16_t voltage; /* Tracks any DAC/ADC voltage discrepancies */
      uint16_t voltage_spike_a; /* Used to filter any DAC/ADC voltage spikes */
      uint16_t voltage_spike_b; /* Used to filter any DAC/ADC voltage spikes */
@@ -106,3 +109,5 @@ typedef struct
     //
     //
 } current_control_state;
+
+#endif /* CURRENT_CONTROL_H */
